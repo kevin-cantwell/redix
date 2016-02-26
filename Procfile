@@ -1,0 +1,1 @@
+redix-server: go run cmd/redix-server/main.go
