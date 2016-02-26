@@ -5,128 +5,15 @@ import (
 	"io"
 	"net"
 	"os"
-
-	"golang.org/x/net/context"
+	"strings"
 
 	"github.com/kevin-cantwell/redix"
+
+	"golang.org/x/net/context"
 )
 
 // TODOs:
 // Use net.ResolveTCPAddr to resolve masters/slaves before opening
-
-type RespObject struct {
-	Body []byte
-	Err  error
-}
-
-type Client struct {
-	conn   net.Conn
-	reader *redix.RESPReader
-}
-
-func (client *Client) String() string {
-	if client == nil {
-		return "<disconnected>"
-	}
-	return client.conn.RemoteAddr().String()
-}
-
-type Server struct {
-	conn   net.Conn
-	reader *redix.RESPReader
-}
-
-func (server *Server) String() string {
-	if server == nil {
-		return "<disconnected>"
-	}
-	return server.conn.RemoteAddr().String()
-}
-
-type Proxy struct {
-	client *Client
-	server *Server
-
-	// Communication channels used to manage all connections
-	// during promotion
-	promoting chan<- struct{}
-	promoted  chan<- string
-}
-
-type ProxyConfig struct {
-	Promoting chan<- struct{}
-	Promoted  chan<- string
-}
-
-func NewProxy(clientConn net.Conn, config ProxyConfig) Proxy {
-	return Proxy{
-		client:    &Client{conn: clientConn, reader: redix.NewReader(clientConn)},
-		promoting: config.Promoting,
-		promoted:  config.Promoted,
-	}
-}
-
-func (proxy *Proxy) ReadClientObject() <-chan RespObject {
-	clientResp := make(chan RespObject)
-	go func() {
-		body, err := proxy.client.reader.ReadObject()
-		clientResp <- RespObject{Body: body, Err: err}
-	}()
-	return clientResp
-}
-
-func (proxy *Proxy) WriteClientObject(body []byte) error {
-	fmt.Printf("%v <- %v %q\n", proxy.client, proxy.server, body)
-	_, err := proxy.client.conn.Write(body)
-	return err
-}
-
-func (proxy *Proxy) WriteClientErr(e error) error {
-	resp := "-PROXYERR " + e.Error() + "\r\n"
-	fmt.Printf("%v <- %v %q\n", proxy.client, proxy.server, resp)
-	_, err := proxy.client.conn.Write([]byte(resp))
-	return err
-}
-
-func (proxy *Proxy) WriteServerObject(body []byte) <-chan RespObject {
-	serverResp := make(chan RespObject)
-	go func() {
-		fmt.Printf("%v -> %v %q\n", proxy.client, proxy.server, body)
-		_, err := proxy.server.conn.Write(body)
-		if err != nil {
-			serverResp <- RespObject{Err: err}
-			return
-		}
-		body, err := proxy.server.reader.ReadObject()
-		serverResp <- RespObject{Body: body, Err: err}
-	}()
-	return serverResp
-}
-
-func (proxy *Proxy) Println(msg string) {
-	fmt.Println(proxy.client, "<>", proxy.server, msg)
-}
-
-func (proxy *Proxy) Open(serverURL string) error {
-	// Try to open a connection to the server
-	serverConn, err := net.Dial("tcp", serverURL)
-	if err != nil {
-		return err
-	}
-	proxy.server = &Server{conn: serverConn, reader: redix.NewReader(serverConn)}
-	proxy.Println("proxy opened")
-	return nil
-}
-
-func (proxy *Proxy) Close() {
-	defer proxy.Println("proxy closed")
-	if proxy.server != nil {
-		proxy.server.conn.Close()
-	}
-	if proxy.client != nil {
-		proxy.client.conn.Close()
-	}
-}
 
 func main() {
 	port := os.Getenv("PORT")
@@ -160,13 +47,13 @@ func main() {
 			serverURL = <-promoted
 			ctx, cancel = context.WithCancel(context.Background())
 		default:
-			proxy := NewProxy(clientConn, ProxyConfig{Promoting: promoting, Promoted: promoted})
+			proxy := redix.NewProxy(clientConn, redix.ProxyConfig{Promoting: promoting, Promoted: promoted})
 			go handleProxy(ctx, proxy, serverURL)
 		}
 	}
 }
 
-func handleProxy(ctx context.Context, proxy Proxy, serverURL string) {
+func handleProxy(ctx context.Context, proxy redix.Proxy, serverURL string) {
 	defer proxy.Close()
 
 	if err := proxy.Open(serverURL); err != nil {
@@ -193,6 +80,20 @@ func handleProxy(ctx context.Context, proxy Proxy, serverURL string) {
 				}
 				continue
 			}
+
+			// Intercept any extended commands, such as PROMOTE
+			if strings.ToUpper(string(clientResp.Body)) == "*2\r\n$7\r\nPROMOTE\r\n$6\r\nSLAVE0\r\n" {
+				proxy.Println("promoting slave0")
+				if err := proxy.Promote("slave0"); err != nil {
+					if err := proxy.WriteClientErr(err); err != nil {
+						return
+					}
+				}
+				continue
+			}
+			// case "*1\r\n$7\r\nMONITOR\r\n":
+			// 	monitor = true
+			// }
 
 			select {
 			// Kill signal received
