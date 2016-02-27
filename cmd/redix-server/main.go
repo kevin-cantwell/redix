@@ -72,8 +72,8 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 
 // Parses the resp object and returns the components
 func parseRESP(resp []byte) redix.Command {
-	if strings.ToUpper(string(resp)) == "*3\r\n$7\r\nPROMOTE\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n" {
-		return redix.Command{Name: "PROMOTE", Args: []string{"127.0.0.1", "6380", ""}}
+	if strings.ToUpper(string(resp)) == "*4\r\n$7\r\nPROMOTE\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n$4\r\nPASS\r\n" {
+		return redix.Command{Name: "PROMOTE", Args: []string{"127.0.0.1", "6380", "pass"}}
 	}
 	if strings.ToUpper(string(resp)) == "*1\r\n$7\r\nMONITOR\r\n" {
 		return redix.Command{Name: "MONITOR"}
