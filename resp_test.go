@@ -1,87 +1,110 @@
 package redix_test
 
 import (
+	"bytes"
+
 	"github.com/kevin-cantwell/redix"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
+// var _ = Describe("RESPReader", func() {
+// 	Describe("#ParseObject", func() {
+// 		It("Should parse simple strings", func() {
+// 			bytes.NewReader(b)
+// 			r := redix.NewReader(strings.NewReader("+OK\r\n"))
+// 			obj, err := r.ParseObject()
+// 			Expect(err).To(BeNil())
+// 			Expect(obj).To(HaveLen(1))
+// 			Expect(string(obj[0])).To(Equal("OK"))
+// 		})
+
+// 		It("Should parse simple strings", func() {
+// 			r := redix.NewReader(strings.NewReader("+OK\r\n"))
+// 			obj, err := r.ParseObject()
+// 			Expect(err).To(BeNil())
+// 			Expect(obj).To(HaveLen(1))
+// 			Expect(string(obj[0])).To(Equal("OK"))
+// 		})
+// 	})
+// })
+
 var _ = Describe("ParseResp", func() {
 	Context("Valid RESP", func() {
 		It("Should parse integers.", func() {
 			// Max signed 64 bit
-			resp, err := redix.ParseRESP([]byte(":9223372036854775807\r\n"))
+			resp, err := redix.NewReader(bytes.NewReader([]byte(":9223372036854775807\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("9223372036854775807"))
 
 			// Minus one, which is the null value for bulk strings
-			resp, err = redix.ParseRESP([]byte(":-1\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte(":-1\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("-1"))
 
 			// Allow negation symbol with zero (not defined in spec, we just allow it)
-			resp, err = redix.ParseRESP([]byte(":-0\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte(":-0\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("0"))
 
 			// Zero
-			resp, err = redix.ParseRESP([]byte(":0\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte(":0\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("0"))
 
 			// Min singed 64 bit
-			resp, err = redix.ParseRESP([]byte(":-9223372036854775808\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte(":-9223372036854775808\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("-9223372036854775808"))
 		})
 		It("Should parse simple strings.", func() {
-			resp, err := redix.ParseRESP([]byte("+OK\r\n"))
+			resp, err := redix.NewReader(bytes.NewReader([]byte("+OK\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("OK"))
 
 			// Empty strings are valid
-			resp, err = redix.ParseRESP([]byte("+\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("+\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal(""))
 		})
 		It("Should parse errors.", func() {
-			resp, err := redix.ParseRESP([]byte("-ERR something\r\n"))
+			resp, err := redix.NewReader(bytes.NewReader([]byte("-ERR something\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("ERR something"))
 
 			// Empty strings are valid
-			resp, err = redix.ParseRESP([]byte("-\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("-\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal(""))
 		})
 		It("Should parse bulk strings.", func() {
-			resp, err := redix.ParseRESP([]byte("$10\r\n1234\r\n7890\r\n"))
+			resp, err := redix.NewReader(bytes.NewReader([]byte("$10\r\n1234\r\n7890\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal("1234\r\n7890"))
 
 			// Empty strings are valid
-			resp, err = redix.ParseRESP([]byte("$0\r\n\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("$0\r\n\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(string(resp[0])).To(Equal(""))
 
 			// Null Bulk String
-			resp, err = redix.ParseRESP([]byte("$-1\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("$-1\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(resp[0]).To(BeNil())
 		})
-		FIt("Should parse arrays.", func() {
+		It("Should parse arrays.", func() {
 			// Empty array
-			resp, err := redix.ParseRESP([]byte("*0\r\n"))
+			resp, err := redix.NewReader(bytes.NewReader([]byte("*0\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(resp).To(Equal([][]byte{}))
 
 			// Null Array
-			resp, err = redix.ParseRESP([]byte("*-1\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("*-1\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(resp).To(BeNil())
 
 			// Array of three integers
-			resp, err = redix.ParseRESP([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("*3\r\n:1\r\n:2\r\n:3\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(resp).To(HaveLen(3))
 			Expect(string(resp[0])).To(Equal("1"))
@@ -89,84 +112,91 @@ var _ = Describe("ParseResp", func() {
 			Expect(string(resp[2])).To(Equal("3"))
 
 			// Array of mixed types
-			resp, err = redix.ParseRESP([]byte("*4\r\n:1\r\n+OK\r\n-ERR\r\n$6\r\nhey\nho\r\n"))
+			resp, err = redix.NewReader(bytes.NewReader([]byte("*4\r\n:1\r\n+OK\r\n-ERR\r\n$6\r\nhey\nho\r\n"))).ParseObject()
 			Expect(err).To(BeNil())
 			Expect(resp).To(HaveLen(4))
 			Expect(string(resp[0])).To(Equal("1"))
 			Expect(string(resp[1])).To(Equal("OK"))
 			Expect(string(resp[2])).To(Equal("ERR"))
 			Expect(string(resp[3])).To(Equal("hey\nho"))
+
+			// Make sure :+-$ chars may appear in bulk strings
+			resp, err = redix.NewReader(bytes.NewReader([]byte("*1\r\n$4\r\n:+-$\r\n"))).ParseObject()
+			Expect(err).To(BeNil())
+			Expect(resp).To(HaveLen(1))
+			Expect(string(resp[0])).To(Equal(":+-$"))
 		})
 	})
 	Context("Invalid RESP", func() {
 		It("Should validate integers.", func() {
 			// Check for a value
-			_, err := redix.ParseRESP([]byte(":\r\n"))
+			_, err := redix.NewReader(bytes.NewReader([]byte(":\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: ":\r\n" must contain a value and end with CRLF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
 			// Check for CRLF
-			_, err = redix.ParseRESP([]byte(":123\r"))
+			_, err = redix.NewReader(bytes.NewReader([]byte(":123\r"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: ":123\r" must be terminated with CRLF`))
+			Expect(err.Error()).To(Equal(`EOF`))
 
 			// Check positive 64-bit boundary +1
-			_, err = redix.ParseRESP([]byte(":9223372036854775808\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte(":9223372036854775808\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: ":9223372036854775808\r\n" is not a 64 bit integer`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
 			// Check negative 64-bit boundary -1
-			_, err = redix.ParseRESP([]byte(":-9223372036854775809\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte(":-9223372036854775809\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: ":-9223372036854775809\r\n" is not a 64 bit integer`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 		})
 		It("Should validate simple strings.", func() {
 			// Check for CR
-			_, err := redix.ParseRESP([]byte("+No\rCR\r\n"))
+			_, err := redix.NewReader(bytes.NewReader([]byte("+No\rCR\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "+No\rCR\r\n" may not contain CR or LF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
 			// Check for LF
-			_, err = redix.ParseRESP([]byte("+No\nLF\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("+No\nLF\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "+No\nLF\r\n" may not contain CR or LF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
 			// Check for terminating CRLF
-			_, err = redix.ParseRESP([]byte("+NOTOK\r"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("+NOTOK\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "+NOTOK\r" must be terminated with CRLF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 		})
 		It("Should validate errors.", func() {
 			// Check for CR
-			_, err := redix.ParseRESP([]byte("-No\rCR\r\n"))
+			_, err := redix.NewReader(bytes.NewReader([]byte("-No\rCR\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "-No\rCR\r\n" may not contain CR or LF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
 			// Check for LF
-			_, err = redix.ParseRESP([]byte("-NOTOK\r"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("-NOTOK\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "-NOTOK\r" must be terminated with CRLF`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 		})
 		It("Should validate bulk strings.", func() {
-			_, err := redix.ParseRESP([]byte("$123"))
+			_, err := redix.NewReader(bytes.NewReader([]byte("$123"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "$123" must indicate both a length and a value`))
+			Expect(err.Error()).To(Equal(`EOF`))
 
-			_, err = redix.ParseRESP([]byte("$3\r\n123"))
+			r := redix.NewReader(bytes.NewReader([]byte("$3\r\n123")))
+			_, err = r.ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "$3\r\n123" must be terminated with CRLF`))
+			Expect(err.Error()).To(Equal(`EOF`))
 
-			_, err = redix.ParseRESP([]byte("%3\r\nfoo\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("%3\r\nfoo\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "%3\r\nfoo\r\n" contains invalid prefix`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
-			_, err = redix.ParseRESP([]byte("$three\r\nfoo\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("$three\r\nfoo\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "$three\r\nfoo\r\n" must specify an integer length`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 
-			_, err = redix.ParseRESP([]byte("$9\r\n1234\r\n7890\r\n"))
+			_, err = redix.NewReader(bytes.NewReader([]byte("$9\r\n1234\r\n7890\r\n"))).ParseObject()
 			Expect(err).NotTo(BeNil())
-			Expect(err.Error()).To(Equal(`resp: "$9\r\n1234\r\n7890\r\n" incorrect length`))
+			Expect(err.Error()).To(Equal(`resp: invalid syntax`))
 		})
 	})
 })

@@ -54,7 +54,7 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 			return
 		}
 
-		parsed, err := redix.ParseRESP(clientResp)
+		parsed, err := redix.NewReader(bytes.NewReader(clientResp)).ParseObject()
 		if err != nil {
 			proxy.WriteClientErr(err)
 			continue

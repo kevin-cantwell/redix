@@ -1,6 +1,7 @@
 package redix
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -84,7 +85,7 @@ func (proxy *Proxy) WriteClientErr(e error) error {
 }
 
 func (proxy *Proxy) WriteServerObject(body []byte) error {
-	fmt.Printf("%v -> %v %q\n", proxy.clientName(), proxy.serverName(), body)
+	fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
 	_, err := proxy.serverConn.Write(body)
 	if err != nil {
 		proxy.Println("ERR:", err)
@@ -109,6 +110,28 @@ func (proxy *Proxy) Println(msg ...interface{}) {
 		args[i] = msg[i-1]
 	}
 	fmt.Println(args...)
+}
+
+func (proxy *Proxy) SprintRESP(body []byte) string {
+	resp, err := NewReader(bytes.NewReader(body)).ParseObject()
+	if err != nil {
+		return err.Error()
+	}
+	if resp == nil {
+		return `(null)`
+	}
+	var result string
+	for i, p := range resp {
+		if i != 0 {
+			result += fmt.Sprintf(" ")
+		}
+		if p == nil {
+			result += fmt.Sprintf(`(null)`)
+		} else {
+			result += fmt.Sprintf("%q", p)
+		}
+	}
+	return result
 }
 
 func (proxy *Proxy) Close() {
