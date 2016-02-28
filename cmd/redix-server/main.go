@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/kevin-cantwell/redix"
 
@@ -23,7 +25,20 @@ func main() {
 	fmt.Println("Listening on " + ":" + port)
 
 	// TODO: source this from writable config file
-	dialer := &redix.Dialer{IP: "127.0.0.1", Port: "6379"}
+	redisURL, err := url.Parse(os.Getenv("REDIS_URL"))
+	if err != nil {
+		fmt.Println("Error parsing REDIS_URL")
+		os.Exit(1)
+	}
+
+	ipPort := strings.Split(redisURL.Host, ":")
+	var auth string
+	if redisURL.User != nil {
+		if password, ok := redisURL.User.Password(); ok {
+			auth = password
+		}
+	}
+	dialer := &redix.Dialer{IP: ipPort[0], Port: ipPort[1], Auth: auth}
 	conns := redix.NewConnectionManager()
 
 	ctx := context.Background()
@@ -75,18 +90,6 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 		}
 	}
 }
-
-// Parses the resp object and returns the components
-// func parseClientRESP(resp []byte) redix.Command {
-// 	parsed := redix.ParseRESP(resp)
-// 	if strings.ToUpper(string(resp)) == "*4\r\n$7\r\nPROMOTE\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n$4\r\nPASS\r\n" {
-// 		return redix.Command{Name: "PROMOTE", Args: []string{"127.0.0.1", "6380", "pass"}}
-// 	}
-// 	if strings.ToUpper(string(resp)) == "*1\r\n$7\r\nMONITOR\r\n" {
-// 		return redix.Command{Name: "MONITOR"}
-// 	}
-// 	return redix.Command{Name: "?"}
-// }
 
 func handlePromotion(proxy redix.Proxy, args [][]byte) error {
 	if len(args) < 2 || len(args) > 3 {
