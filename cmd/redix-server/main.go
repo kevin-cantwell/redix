@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
-	"strings"
 
 	"github.com/kevin-cantwell/redix"
 
@@ -53,14 +54,19 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 			return
 		}
 
-		cmd := parseRESP(clientResp)
-		switch cmd.Name {
-		case "PROMOTE":
-			if err := handlePromotion(proxy, cmd); err != nil {
+		parsed, err := redix.ParseRESP(clientResp)
+		if err != nil {
+			proxy.WriteClientErr(err)
+			continue
+		}
+
+		switch string(bytes.ToLower(parsed[0])) {
+		case "promote":
+			if err := handlePromotion(proxy, parsed[1:]); err != nil {
 				continue
 			}
 			return
-		case "MONITOR":
+		case "monitor":
 		default:
 		}
 
@@ -71,93 +77,26 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 }
 
 // Parses the resp object and returns the components
-func parseRESP(resp []byte) redix.Command {
-	if strings.ToUpper(string(resp)) == "*4\r\n$7\r\nPROMOTE\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n$4\r\nPASS\r\n" {
-		return redix.Command{Name: "PROMOTE", Args: []string{"127.0.0.1", "6380", "pass"}}
-	}
-	if strings.ToUpper(string(resp)) == "*1\r\n$7\r\nMONITOR\r\n" {
-		return redix.Command{Name: "MONITOR"}
-	}
-	return redix.Command{Name: "?"}
-}
+// func parseClientRESP(resp []byte) redix.Command {
+// 	parsed := redix.ParseRESP(resp)
+// 	if strings.ToUpper(string(resp)) == "*4\r\n$7\r\nPROMOTE\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n$4\r\nPASS\r\n" {
+// 		return redix.Command{Name: "PROMOTE", Args: []string{"127.0.0.1", "6380", "pass"}}
+// 	}
+// 	if strings.ToUpper(string(resp)) == "*1\r\n$7\r\nMONITOR\r\n" {
+// 		return redix.Command{Name: "MONITOR"}
+// 	}
+// 	return redix.Command{Name: "?"}
+// }
 
-func handlePromotion(proxy redix.Proxy, cmd redix.Command) error {
-	// For now hard-coding promotion deets :|
-
-	ip := cmd.Args[0]
-	port := cmd.Args[1]
-	auth := cmd.Args[2]
-	if err := proxy.Promote(ip, port, auth); err != nil {
+func handlePromotion(proxy redix.Proxy, args [][]byte) error {
+	if len(args) < 2 || len(args) > 3 {
+		err := errors.New("wrong number of arguments for 'promote' command")
+		proxy.WriteClientErr(err)
 		return err
 	}
-
-	return nil
+	ip, port, auth := string(args[0]), string(args[1]), ""
+	if len(args) == 3 {
+		auth = string(args[2])
+	}
+	return proxy.Promote(ip, port, auth)
 }
-
-// func handleProxy(ctx context.Context, proxy redix.Proxy, serverURL string) {
-// 	defer proxy.Close()
-
-// 	if err := proxy.Open(serverURL); err != nil {
-// 		proxy.WriteClientErr(err)
-// 		return
-// 	}
-
-// 	// Handle client requests, but die if kill signal is sent.
-// 	for {
-// 		select {
-// 		// Kill signal received
-// 		case <-ctx.Done():
-// 			return
-// 		// Client sends a request
-// 		case clientResp := <-proxy.ReadClientObject():
-// 			// Handle client errors
-// 			if clientResp.Err != nil {
-// 				if clientResp.Err == io.EOF {
-// 					proxy.Println("client sent EOF")
-// 					return
-// 				}
-// 				if err := proxy.WriteClientErr(clientResp.Err); err != nil {
-// 					return
-// 				}
-// 				continue
-// 			}
-
-// 			// Intercept any extended commands, such as PROMOTE
-// 			if strings.ToUpper(string(clientResp.Body)) == "*2\r\n$7\r\nPROMOTE\r\n$6\r\nSLAVE0\r\n" {
-// 				proxy.Println("promoting slave0")
-// 				if err := proxy.Promote("slave0"); err != nil {
-// 					if err := proxy.WriteClientErr(err); err != nil {
-// 						return
-// 					}
-// 				}
-// 				continue
-// 			}
-// 			// case "*1\r\n$7\r\nMONITOR\r\n":
-// 			// 	monitor = true
-// 			// }
-
-// 			select {
-// 			// Kill signal received
-// 			case <-ctx.Done():
-// 				return
-// 			// Forward client request to server and wait for response
-// 			case serverResp := <-proxy.WriteServerObject(clientResp.Body):
-// 				// Handle server errors
-// 				if serverResp.Err != nil {
-// 					if serverResp.Err == io.EOF {
-// 						proxy.Println("server sent EOF")
-// 						return
-// 					}
-// 					if err := proxy.WriteClientErr(serverResp.Err); err != nil {
-// 						return
-// 					}
-// 					continue
-// 				}
-
-// 				if err := proxy.WriteClientObject(serverResp.Body); err != nil {
-// 					return
-// 				}
-// 			}
-// 		}
-// 	}
-// }
