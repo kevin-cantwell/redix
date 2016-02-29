@@ -90,7 +90,6 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 				proxy.WriteClientErr(err)
 			}
 			return
-		case "monitor":
 		default:
 		}
 

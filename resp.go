@@ -2,7 +2,6 @@ package redix
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"io"
 	"strconv"
@@ -31,7 +30,7 @@ type RESPReader struct {
 
 func NewReader(reader io.Reader) *RESPReader {
 	return &RESPReader{
-		Reader: bufio.NewReaderSize(reader, 32*1024), // 32KB is just a guess
+		Reader: bufio.NewReaderSize(reader, 128*1024),
 	}
 }
 
@@ -79,18 +78,15 @@ func (r *RESPReader) ParseObject() ([][]byte, error) {
 
 // In readLine(), we read up until the first occurrence of \n and
 // then check to make sure that it was preceded by a \r before returning the line as a byte slice.
-func (r *RESPReader) readLine() (line []byte, err error) {
-	line, err = r.ReadSlice('\n')
+func (r *RESPReader) readLine() ([]byte, error) {
+	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
-
-	if len(line) > 1 && line[len(line)-2] == '\r' {
-		return line, nil
-	} else {
-		// Line was too short or \n wasn't preceded by \r.
+	if len(line) < 2 || line[len(line)-2] != '\r' {
 		return nil, ErrInvalidSyntax
 	}
+	return line, nil
 }
 
 // In readBulkString() we parse the length specification for the bulk string to know how many
@@ -106,8 +102,7 @@ func (r *RESPReader) readBulkString(line []byte) ([]byte, error) {
 
 	buf := make([]byte, len(line)+count+2)
 	copy(buf, line)
-	_, err = r.Read(buf[len(line):])
-	if err != nil {
+	if _, err := io.ReadFull(r, buf[len(line):]); err != nil {
 		return nil, err
 	}
 
@@ -223,10 +218,24 @@ func (r *RESPReader) parseArray(line []byte) ([][]byte, error) {
 
 // line is gauranteed to begin with a prefix and end with CRLF
 func (r *RESPReader) getCount(line []byte) (int, error) {
-	end := bytes.IndexByte(line, '\r')
-	if count, err := strconv.Atoi(string(line[1:end])); err != nil {
-		return 0, ErrInvalidSyntax
-	} else {
-		return count, nil
+	if len(line) == 0 {
+		return -1, ErrInvalidSyntax
 	}
+
+	if len(line) == 5 && line[1] == '-' && line[2] == '1' {
+		// handle $-1 and $-1 null replies.
+		return -1, nil
+	}
+
+	// Credit goes to redigo for this logic
+	var n int
+	for _, b := range line[1 : len(line)-2] {
+		n *= 10
+		if b < '0' || b > '9' {
+			return -1, ErrInvalidSyntax
+		}
+		n += int(b - '0')
+	}
+
+	return n, nil
 }

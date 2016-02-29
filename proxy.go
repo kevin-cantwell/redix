@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ type Proxy struct {
 	clientConn   net.Conn
 	serverConn   net.Conn
 	clientReader *RESPReader
-	serverReader *RESPReader
 	Verbose      bool
 }
 
@@ -58,7 +58,8 @@ func (proxy *Proxy) Open() error {
 	}
 
 	proxy.serverConn = proxy.mgr.Add(serverConn) // Manage server connections only
-	proxy.serverReader = NewReader(proxy.serverConn)
+	// Will return when serverConn is closed
+	go io.Copy(proxy.clientConn, proxy.serverConn)
 	proxy.Println("proxy opened")
 	return nil
 }
@@ -71,36 +72,20 @@ func (proxy *Proxy) ReadClientObject() ([]byte, error) {
 	return body, nil
 }
 
-func (proxy *Proxy) WriteClientObject(body []byte) error {
-	if proxy.Verbose {
-		fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), body)
-	}
-	_, err := proxy.clientConn.Write(body)
-	return err
-}
-
 func (proxy *Proxy) WriteClientErr(e error) error {
-	resp := "-ERR " + e.Error() + "\r\n"
-	if proxy.Verbose {
-		fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), resp)
-	}
-	_, err := proxy.clientConn.Write([]byte(resp))
+	_, err := proxy.clientConn.Write([]byte("-ERR " + e.Error() + "\r\n"))
 	return err
 }
 
 func (proxy *Proxy) WriteServerObject(body []byte) error {
 	if proxy.Verbose {
-		fmt.Printf("%v -> %v %q\n", proxy.clientName(), proxy.serverName(), body) // proxy.SprintRESP(body))
+		fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
 	}
 	_, err := proxy.serverConn.Write(body)
 	if err != nil {
 		return err
 	}
-	resp, err := proxy.serverReader.ReadObject()
-	if err != nil {
-		return err
-	}
-	return proxy.WriteClientObject(resp)
+	return nil
 }
 
 func (proxy *Proxy) Println(msg ...interface{}) {
@@ -239,7 +224,7 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 		return errors.New(string(response[0]))
 	}
 
-	proxy.WriteClientObject([]byte("+OK\r\n"))
+	proxy.clientConn.Write([]byte("+OK\r\n"))
 
 	proxy.dialer.Reset(ip, port, auth)
 
