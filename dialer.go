@@ -37,7 +37,8 @@ func (dialer *Dialer) Dial() (net.Conn, error) {
 			conn.Close()
 			return nil, err
 		} else {
-			if result != "+OK\r\n" {
+			// Two valid states: Auth set successfully, or no auth required.
+			if result != "+OK\r\n" && result != "-ERR Client sent AUTH, but no password is set\r\n" {
 				conn.Close()
 				return nil, errors.New("invalid password")
 			}
