@@ -1,6 +1,8 @@
 package redix
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -30,6 +32,15 @@ func (dialer *Dialer) Dial() (net.Conn, error) {
 		if _, err := conn.Write([]byte(fmt.Sprintf("*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(dialer.Auth), dialer.Auth))); err != nil {
 			conn.Close()
 			return nil, err
+		}
+		if result, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+			conn.Close()
+			return nil, err
+		} else {
+			if result != "+OK\r\n" {
+				conn.Close()
+				return nil, errors.New("invalid password")
+			}
 		}
 	}
 	return conn, nil

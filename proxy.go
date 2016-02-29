@@ -1,11 +1,14 @@
 package redix
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
+	"time"
 )
 
 type Proxy struct {
@@ -151,10 +154,6 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 
 	proxy.Println("promoting", ip, port)
 
-	// Close all server connections, thereby severing any in-flight requests
-	// This proxy will close after promotion
-	proxy.mgr.CloseAll()
-
 	// proxy.Println("dialing " + ip + ":" + port)
 	dialer := Dialer{IP: ip, Port: port, Auth: auth}
 	slaveConn, err := dialer.Dial()
@@ -163,13 +162,38 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 	}
 	defer slaveConn.Close()
 
-	// TODO: Check replication lag in a loop until zero
+	slaveReader := NewReader(slaveConn)
 
-	// proxy.Println("disabling replication", ip, port)
+	// Close all server connections, thereby severing any in-flight requests
+	// This proxy will thereby be closed by main when this function returns
+	proxy.mgr.CloseAll()
+
+	// Check replication lag in a loop until zero
+	for range time.Tick(100 * time.Millisecond) {
+		if _, err := slaveConn.Write([]byte("*1\r\n$4\r\nINFO\r\n")); err != nil {
+			return err
+		}
+		parsed, err := slaveReader.ParseObject()
+		if err != nil {
+			return err
+		}
+		info, err := proxy.parseMasterReplOffset(parsed[0])
+		if err != nil {
+			return err
+		}
+		if offset, ok := info["master_repl_offset"]; !ok {
+			return errors.New("no replication offset found")
+		} else {
+			proxy.Println("master_repl_offset:" + offset)
+			if offset == "0" {
+				break
+			}
+		}
+	}
+
 	if _, err := slaveConn.Write([]byte("*3\r\n$7\r\nSLAVEOF\r\n$2\r\nNO\r\n$3\r\nONE\r\n")); err != nil {
 		return err
 	}
-	slaveReader := NewReader(slaveConn)
 	response, err := slaveReader.ReadObject()
 	if err != nil {
 		return err
@@ -185,14 +209,35 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 	return nil
 }
 
-func (proxy *Proxy) parseInfo(info []byte, key string) (string, error) {
-	// TODO: Actually parse, don't just hardcode
-	switch key {
-	case "slave0":
-		return "ip=127.0.0.1,port=6380,state=online,offset=26940,lag=1", nil
-	case "master_repl_offset":
-		return "0", nil
-	default:
-		return "", errors.New("no such info key: " + key)
+func (proxy *Proxy) parseMasterReplOffset(info []byte) (map[string]string, error) {
+	// r := bufio.NewReader(bytes.NewReader(info))
+	m := map[string]string{}
+
+	scanner := bufio.NewScanner(bytes.NewReader(info))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		kv := strings.Split(line, ":")
+		m[kv[0]] = kv[1]
 	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return m, nil
+
+	// for line, err := r.ReadSlice('\n'); err != io.EOF;
+
+	// TODO: Actually parse, don't just hardcode
+	// switch key {
+	// case "slave0":
+	// 	return "ip=127.0.0.1,port=6380,state=online,offset=26940,lag=1", nil
+	// case "master_repl_offset":
+	// 	return "0", nil
+	// default:
+	// 	return "", errors.New("no such info key: " + key)
+	// }
 }

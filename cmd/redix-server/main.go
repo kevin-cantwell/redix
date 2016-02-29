@@ -78,7 +78,7 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 		switch string(bytes.ToLower(parsed[0])) {
 		case "promote":
 			if err := handlePromotion(proxy, parsed[1:]); err != nil {
-				continue
+				proxy.WriteClientErr(err)
 			}
 			return
 		case "monitor":
@@ -86,6 +86,7 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 		}
 
 		if err := proxy.WriteServerObject(clientResp); err != nil {
+			proxy.WriteClientErr(err)
 			return
 		}
 	}

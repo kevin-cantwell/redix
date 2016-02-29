@@ -29,9 +29,6 @@ type RESPReader struct {
 	*bufio.Reader
 }
 
-// Validation TODOs:
-// * Make sure simple strings and errors contain no CR or LF bytes
-// * Make sure integers are 64-bit
 func NewReader(reader io.Reader) *RESPReader {
 	return &RESPReader{
 		Reader: bufio.NewReaderSize(reader, 32*1024), // 32KB is just a guess
@@ -39,7 +36,7 @@ func NewReader(reader io.Reader) *RESPReader {
 }
 
 // ReadObject will attempt to parse the input as a RESP
-// object, and if that fails, as a LF-terminated line
+// object.
 func (r *RESPReader) ReadObject() ([]byte, error) {
 	line, err := r.readLine()
 	if err != nil {
@@ -58,6 +55,8 @@ func (r *RESPReader) ReadObject() ([]byte, error) {
 	}
 }
 
+// ParseObject will attempt to parse the input as a RESP
+// object and further parse the object into its components
 func (r *RESPReader) ParseObject() ([][]byte, error) {
 	line, err := r.readLine()
 	if err != nil {
