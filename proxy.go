@@ -18,6 +18,7 @@ type Proxy struct {
 	serverConn   net.Conn
 	clientReader *RESPReader
 	serverReader *RESPReader
+	Verbose      bool
 }
 
 func NewProxy(clientConn net.Conn, dialer *Dialer, mgr *ConnectionManager) Proxy {
@@ -26,6 +27,7 @@ func NewProxy(clientConn net.Conn, dialer *Dialer, mgr *ConnectionManager) Proxy
 		mgr:          mgr,
 		clientConn:   clientConn,
 		clientReader: NewReader(clientConn),
+		Verbose:      true,
 	}
 }
 
@@ -75,20 +77,26 @@ func (proxy *Proxy) ReadClientObject() ([]byte, error) {
 }
 
 func (proxy *Proxy) WriteClientObject(body []byte) error {
-	fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), body)
+	if proxy.Verbose {
+		fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), body)
+	}
 	_, err := proxy.clientConn.Write(body)
 	return err
 }
 
 func (proxy *Proxy) WriteClientErr(e error) error {
 	resp := "-ERR " + e.Error() + "\r\n"
-	fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), resp)
+	if proxy.Verbose {
+		fmt.Printf("%v <- %v %q\n", proxy.clientName(), proxy.serverName(), resp)
+	}
 	_, err := proxy.clientConn.Write([]byte(resp))
 	return err
 }
 
 func (proxy *Proxy) WriteServerObject(body []byte) error {
-	fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
+	if proxy.Verbose {
+		fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
+	}
 	_, err := proxy.serverConn.Write(body)
 	if err != nil {
 		proxy.Println("ERR:", err)
@@ -107,12 +115,14 @@ func (proxy *Proxy) WriteServerObject(body []byte) error {
 }
 
 func (proxy *Proxy) Println(msg ...interface{}) {
-	args := make([]interface{}, len(msg)+1)
-	args[0] = proxy
-	for i := 1; i < len(args); i++ {
-		args[i] = msg[i-1]
+	if proxy.Verbose {
+		args := make([]interface{}, len(msg)+1)
+		args[0] = proxy
+		for i := 1; i < len(args); i++ {
+			args[i] = msg[i-1]
+		}
+		fmt.Println(args...)
 	}
-	fmt.Println(args...)
 }
 
 func (proxy *Proxy) SprintRESP(body []byte) string {
@@ -138,8 +148,12 @@ func (proxy *Proxy) SprintRESP(body []byte) string {
 }
 
 func (proxy *Proxy) Close() {
-	proxy.serverConn.Close()
-	proxy.clientConn.Close()
+	if proxy.serverConn != nil {
+		proxy.serverConn.Close()
+	}
+	if proxy.clientConn != nil {
+		proxy.clientConn.Close()
+	}
 	proxy.Println("proxy closed")
 }
 
