@@ -193,39 +193,29 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 	// This proxy will thereby be closed by main when this function returns
 	proxy.mgr.CloseAll()
 
-	// No more errors may be returned after this point, only appended strings to the client
-	proxy.WriteClientObject([]byte("+SLAVE IS BEHIND BY "))
-
 	// Check replication lag in a loop until zero
 	for range time.Tick(100 * time.Millisecond) {
 		if _, err := masterConn.Write([]byte("*1\r\n$4\r\nINFO\r\n")); err != nil {
-			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-			return nil
+			return err
 		}
 		parsed, err := masterReader.ParseObject()
 		if err != nil {
-			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-			return nil
+			return err
 		}
 		info, err := proxy.parseInfo(parsed[0])
 		if err != nil {
-			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-			return nil
+			return err
 		}
 		masterOffset, ok := info["master_repl_offset"]
 		if !ok {
-			err := errors.New("no master_repl_offset found")
-			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-			return nil
+			return errors.New("no master_repl_offset found")
 		}
 		// Search the first ten slaves
 		slaveOffset := "-1"
 		for i := 0; i < 10; i++ {
 			slaveInfo, ok := info[fmt.Sprintf("slave%d", i)]
 			if !ok {
-				err := errors.New(ip + ":" + port + " is not a slave")
-				proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-				return nil
+				return errors.New(ip + ":" + port + " is not a slave")
 			}
 			slaveMap := map[string]string{}
 			for _, slaveKV := range strings.Split(slaveInfo, ",") {
@@ -239,34 +229,29 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 		}
 		// If no matching slave found
 		if slaveOffset == "-1" {
-			err := errors.New(ip + ":" + port + " is not a slave")
-			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-			return nil
+			return errors.New(ip + ":" + port + " is not a slave")
 		}
 		moff, _ := strconv.Atoi(masterOffset)
 		soff, _ := strconv.Atoi(slaveOffset)
-		proxy.WriteClientObject([]byte(fmt.Sprintf("%d...", moff-soff)))
+		proxy.Println("promoting: slave is behind by", moff-soff)
+
 		if slaveOffset == masterOffset {
-			proxy.WriteClientObject([]byte(fmt.Sprintf("%d...DONE. PROMOTING...", moff-soff)))
 			break
 		}
 	}
 
 	if _, err := slaveConn.Write([]byte("*3\r\n$7\r\nSLAVEOF\r\n$2\r\nNO\r\n$3\r\nONE\r\n")); err != nil {
-		proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-		return nil
+		return err
 	}
 	response, err := slaveReader.ParseObject()
 	if err != nil {
-		proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
-		return nil
+		return err
 	}
 	if string(response[0]) != "OK" {
-		proxy.WriteClientObject([]byte("(error: " + string(response[0]) + ")\r\n"))
-		return nil
+		return errors.New(string(response[0]))
 	}
 
-	proxy.WriteClientObject([]byte("OK\r\n"))
+	proxy.WriteClientObject([]byte("+OK\r\n"))
 
 	proxy.dialer.Reset(ip, port, auth)
 
