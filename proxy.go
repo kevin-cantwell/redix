@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -166,11 +167,11 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 	proxy.dialer.mu.Lock()
 	defer proxy.dialer.mu.Unlock()
 
-	proxy.Println("promoting", ip, port)
+	proxy.Println("promoting:", ip, port)
 
-	// proxy.Println("dialing " + ip + ":" + port)
-	dialer := Dialer{IP: ip, Port: port, Auth: auth}
-	slaveConn, err := dialer.Dial()
+	// Create a connection to the slave
+	slaveDialer := Dialer{IP: ip, Port: port, Auth: auth}
+	slaveConn, err := slaveDialer.Dial()
 	if err != nil {
 		return err
 	}
@@ -178,52 +179,101 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 
 	slaveReader := NewReader(slaveConn)
 
+	// Create a new connection to the master
+	masterDialer := Dialer{IP: proxy.dialer.IP, Port: proxy.dialer.Port, Auth: proxy.dialer.Auth}
+	masterConn, err := masterDialer.Dial()
+	if err != nil {
+		return err
+	}
+	defer masterConn.Close()
+
+	masterReader := NewReader(masterConn)
+
 	// Close all server connections, thereby severing any in-flight requests
 	// This proxy will thereby be closed by main when this function returns
 	proxy.mgr.CloseAll()
 
+	// No more errors may be returned after this point, only appended strings to the client
+	proxy.WriteClientObject([]byte("+SLAVE IS BEHIND BY "))
+
 	// Check replication lag in a loop until zero
 	for range time.Tick(100 * time.Millisecond) {
-		if _, err := slaveConn.Write([]byte("*1\r\n$4\r\nINFO\r\n")); err != nil {
-			return err
+		if _, err := masterConn.Write([]byte("*1\r\n$4\r\nINFO\r\n")); err != nil {
+			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+			return nil
 		}
-		parsed, err := slaveReader.ParseObject()
+		parsed, err := masterReader.ParseObject()
 		if err != nil {
-			return err
+			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+			return nil
 		}
-		info, err := proxy.parseMasterReplOffset(parsed[0])
+		info, err := proxy.parseInfo(parsed[0])
 		if err != nil {
-			return err
+			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+			return nil
 		}
-		if offset, ok := info["master_repl_offset"]; !ok {
-			return errors.New("no replication offset found")
-		} else {
-			proxy.Println("master_repl_offset:" + offset)
-			if offset == "0" {
+		masterOffset, ok := info["master_repl_offset"]
+		if !ok {
+			err := errors.New("no master_repl_offset found")
+			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+			return nil
+		}
+		// Search the first ten slaves
+		slaveOffset := "-1"
+		for i := 0; i < 10; i++ {
+			slaveInfo, ok := info[fmt.Sprintf("slave%d", i)]
+			if !ok {
+				err := errors.New(ip + ":" + port + " is not a slave")
+				proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+				return nil
+			}
+			slaveMap := map[string]string{}
+			for _, slaveKV := range strings.Split(slaveInfo, ",") {
+				kv := strings.Split(slaveKV, "=")
+				slaveMap[kv[0]] = kv[1]
+			}
+			if slaveMap["ip"] == ip && slaveMap["port"] == port {
+				slaveOffset = slaveMap["offset"]
 				break
 			}
+		}
+		// If no matching slave found
+		if slaveOffset == "-1" {
+			err := errors.New(ip + ":" + port + " is not a slave")
+			proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+			return nil
+		}
+		moff, _ := strconv.Atoi(masterOffset)
+		soff, _ := strconv.Atoi(slaveOffset)
+		proxy.WriteClientObject([]byte(fmt.Sprintf("%d...", moff-soff)))
+		if slaveOffset == masterOffset {
+			proxy.WriteClientObject([]byte(fmt.Sprintf("%d...DONE. PROMOTING...", moff-soff)))
+			break
 		}
 	}
 
 	if _, err := slaveConn.Write([]byte("*3\r\n$7\r\nSLAVEOF\r\n$2\r\nNO\r\n$3\r\nONE\r\n")); err != nil {
-		return err
+		proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+		return nil
 	}
-	response, err := slaveReader.ReadObject()
+	response, err := slaveReader.ParseObject()
 	if err != nil {
-		return err
+		proxy.WriteClientObject([]byte("(error: " + err.Error() + ")\r\n"))
+		return nil
 	}
-	if string(response) != "+OK\r\n" {
-		return errors.New(string(response))
+	if string(response[0]) != "OK" {
+		proxy.WriteClientObject([]byte("(error: " + string(response[0]) + ")\r\n"))
+		return nil
 	}
 
-	proxy.WriteClientObject(response)
+	proxy.WriteClientObject([]byte("OK\r\n"))
 
 	proxy.dialer.Reset(ip, port, auth)
 
 	return nil
 }
 
-func (proxy *Proxy) parseMasterReplOffset(info []byte) (map[string]string, error) {
+func (proxy *Proxy) parseInfo(info []byte) (map[string]string, error) {
 	// r := bufio.NewReader(bytes.NewReader(info))
 	m := map[string]string{}
 
@@ -242,16 +292,4 @@ func (proxy *Proxy) parseMasterReplOffset(info []byte) (map[string]string, error
 	}
 
 	return m, nil
-
-	// for line, err := r.ReadSlice('\n'); err != io.EOF;
-
-	// TODO: Actually parse, don't just hardcode
-	// switch key {
-	// case "slave0":
-	// 	return "ip=127.0.0.1,port=6380,state=online,offset=26940,lag=1", nil
-	// case "master_repl_offset":
-	// 	return "0", nil
-	// default:
-	// 	return "", errors.New("no such info key: " + key)
-	// }
 }

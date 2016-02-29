@@ -77,7 +77,15 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 
 		switch string(bytes.ToLower(parsed[0])) {
 		case "promote":
-			if err := handlePromotion(proxy, parsed[1:]); err != nil {
+			if len(parsed) < 3 || len(parsed) > 4 {
+				proxy.WriteClientErr(errors.New("wrong number of arguments for 'promote' command"))
+				return
+			}
+			ip, port, auth := string(parsed[1]), string(parsed[2]), ""
+			if len(parsed) == 4 {
+				auth = string(parsed[3])
+			}
+			if err := proxy.Promote(ip, port, auth); err != nil {
 				proxy.WriteClientErr(err)
 			}
 			return
@@ -90,17 +98,4 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 			return
 		}
 	}
-}
-
-func handlePromotion(proxy redix.Proxy, args [][]byte) error {
-	if len(args) < 2 || len(args) > 3 {
-		err := errors.New("wrong number of arguments for 'promote' command")
-		proxy.WriteClientErr(err)
-		return err
-	}
-	ip, port, auth := string(args[0]), string(args[1]), ""
-	if len(args) == 3 {
-		auth = string(args[2])
-	}
-	return proxy.Promote(ip, port, auth)
 }
