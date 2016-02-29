@@ -66,6 +66,7 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 	for {
 		clientResp, err := proxy.ReadClientObject()
 		if err != nil {
+			proxy.Println("client:", err)
 			return
 		}
 

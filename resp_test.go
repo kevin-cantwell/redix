@@ -8,27 +8,6 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// var _ = Describe("RESPReader", func() {
-// 	Describe("#ParseObject", func() {
-// 		It("Should parse simple strings", func() {
-// 			bytes.NewReader(b)
-// 			r := redix.NewReader(strings.NewReader("+OK\r\n"))
-// 			obj, err := r.ParseObject()
-// 			Expect(err).To(BeNil())
-// 			Expect(obj).To(HaveLen(1))
-// 			Expect(string(obj[0])).To(Equal("OK"))
-// 		})
-
-// 		It("Should parse simple strings", func() {
-// 			r := redix.NewReader(strings.NewReader("+OK\r\n"))
-// 			obj, err := r.ParseObject()
-// 			Expect(err).To(BeNil())
-// 			Expect(obj).To(HaveLen(1))
-// 			Expect(string(obj[0])).To(Equal("OK"))
-// 		})
-// 	})
-// })
-
 var _ = Describe("ParseResp", func() {
 	Context("Valid RESP", func() {
 		It("Should parse integers.", func() {
@@ -125,6 +104,9 @@ var _ = Describe("ParseResp", func() {
 			Expect(err).To(BeNil())
 			Expect(resp).To(HaveLen(1))
 			Expect(string(resp[0])).To(Equal(":+-$"))
+
+			// _, err = redix.NewReader(bytes.NewReader([]byte("*4\r\n$6\r\nLRANGE\r\n$28\r\nsampler:screenshots:20160229\r\n$1\r\n0\r\n$2\r\n-1\r\n"))).ParseObject()
+			// Expect(err).To(BeNil())
 		})
 	})
 	Context("Invalid RESP", func() {

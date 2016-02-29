@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -67,11 +66,6 @@ func (proxy *Proxy) Open() error {
 func (proxy *Proxy) ReadClientObject() ([]byte, error) {
 	body, err := proxy.clientReader.ReadObject()
 	if err != nil {
-		if err == io.EOF {
-			proxy.Println("client sent EOF")
-		} else {
-			proxy.Println("ERR:", err)
-		}
 		return nil, err
 	}
 	return body, nil
@@ -96,20 +90,14 @@ func (proxy *Proxy) WriteClientErr(e error) error {
 
 func (proxy *Proxy) WriteServerObject(body []byte) error {
 	if proxy.Verbose {
-		fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
+		fmt.Printf("%v -> %v %q\n", proxy.clientName(), proxy.serverName(), body) // proxy.SprintRESP(body))
 	}
 	_, err := proxy.serverConn.Write(body)
 	if err != nil {
-		proxy.Println("ERR:", err)
 		return err
 	}
 	resp, err := proxy.serverReader.ReadObject()
 	if err != nil {
-		if err == io.EOF {
-			proxy.Println("server sent EOF")
-		} else {
-			proxy.Println("ERR:", err)
-		}
 		return err
 	}
 	return proxy.WriteClientObject(resp)
