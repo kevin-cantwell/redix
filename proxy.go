@@ -166,9 +166,17 @@ func (proxy *Proxy) Promote(ip, port, auth string) error {
 	// This proxy will thereby be closed by main when this function returns
 	proxy.mgr.CloseAll()
 
+	timeout := time.After(3 * time.Second)
+
 	// Check replication lag in a loop until zero
 	for range time.Tick(100 * time.Millisecond) {
-		if _, err := masterConn.Write([]byte("*1\r\n$4\r\nINFO\r\n")); err != nil {
+		select {
+		case <-timeout:
+			return errors.New("timeout")
+		default:
+		}
+
+		if _, err := masterConn.Write([]byte("*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n")); err != nil {
 			return err
 		}
 		parsed, err := masterReader.ParseObject()
