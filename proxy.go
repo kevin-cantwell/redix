@@ -1,8 +1,6 @@
 package redix
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +70,18 @@ func (proxy *Proxy) ReadClientObject() ([]byte, error) {
 	return body, nil
 }
 
+func (proxy *Proxy) ParseClientObject() (Array, error) {
+	resp, err := proxy.clientReader.ParseObject()
+	if err != nil {
+		return nil, err
+	}
+	array, ok := resp.(Array)
+	if !ok {
+		return nil, ErrInvalidSyntax
+	}
+	return array, nil
+}
+
 func (proxy *Proxy) WriteClientErr(e error) error {
 	_, err := proxy.clientConn.Write([]byte("-ERR " + e.Error() + "\r\n"))
 	return err
@@ -79,7 +89,7 @@ func (proxy *Proxy) WriteClientErr(e error) error {
 
 func (proxy *Proxy) WriteServerObject(body []byte) error {
 	if proxy.Verbose {
-		fmt.Printf("%v -> %v %s\n", proxy.clientName(), proxy.serverName(), proxy.SprintRESP(body))
+		fmt.Printf("%v -> %v %q\n", proxy.clientName(), proxy.serverName(), body) // proxy.SprintRESP(body))
 	}
 	_, err := proxy.serverConn.Write(body)
 	if err != nil {
@@ -99,28 +109,6 @@ func (proxy *Proxy) Println(msg ...interface{}) {
 	}
 }
 
-func (proxy *Proxy) SprintRESP(body []byte) string {
-	resp, err := NewReader(bytes.NewReader(body)).ParseObject()
-	if err != nil {
-		return err.Error()
-	}
-	if resp == nil {
-		return `(null)`
-	}
-	var result string
-	for i, p := range resp {
-		if i != 0 {
-			result += fmt.Sprintf(" ")
-		}
-		if p == nil {
-			result += fmt.Sprintf(`(null)`)
-		} else {
-			result += fmt.Sprintf("%q", p)
-		}
-	}
-	return result
-}
-
 func (proxy *Proxy) Close() {
 	if proxy.serverConn != nil {
 		proxy.serverConn.Close()
@@ -136,126 +124,164 @@ func (proxy *Proxy) Close() {
 // 3. execute promotion
 // 4. Reset dialer with promoted vals
 // 5. Unlock dialer
-func (proxy *Proxy) Promote(ip, port, auth string) error {
+func (proxy *Proxy) Promote(slaveID, auth, timeout string) error {
 	proxy.dialer.mu.Lock()
 	defer proxy.dialer.mu.Unlock()
 
-	proxy.Println("promoting:", ip, port)
-
-	// Create a connection to the slave
-	slaveDialer := Dialer{IP: ip, Port: port, Auth: auth}
-	slaveConn, err := slaveDialer.Dial()
-	if err != nil {
-		return err
-	}
-	defer slaveConn.Close()
-
-	slaveReader := NewReader(slaveConn)
+	proxy.Println("promote:", "id="+slaveID, "timeout="+timeout)
 
 	// Create a new connection to the master
-	masterDialer := Dialer{IP: proxy.dialer.IP, Port: proxy.dialer.Port, Auth: proxy.dialer.Auth}
-	masterConn, err := masterDialer.Dial()
+	dialer := Dialer{IP: proxy.dialer.IP, Port: proxy.dialer.Port, Auth: proxy.dialer.Auth}
+	masterConn, err := dialer.Dial()
 	if err != nil {
 		return err
 	}
 	defer masterConn.Close()
-
 	masterReader := NewReader(masterConn)
 
-	// Close all server connections, thereby severing any in-flight requests
-	// This proxy will thereby be closed by main when this function returns
-	proxy.mgr.CloseAll()
+	millis, err := strconv.Atoi(timeout)
+	if err != nil {
+		return errors.New("timeout is not an integer or out of range")
+	}
+	cancel := time.After(time.Duration(millis) * time.Millisecond)
 
-	timeout := time.After(3 * time.Second)
+	multiExec := [][]byte{
+		[]byte("*1\r\n$5\r\nMULTI\r\n"),
+		[]byte("*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n"),
+		[]byte("*3\r\n$6\r\nCLIENT\r\n$5\r\nPAUSE\r\n" + fmt.Sprintf("$%d\r\n%s\r\n", len(timeout), timeout)),
+		[]byte("*1\r\n$4\r\nEXEC\r\n"),
+	}
 
-	// Check replication lag in a loop until zero
+	proxy.Println("promote:", "pausing clients for", timeout, "milliseconds")
+	var info string
+	for _, cmd := range multiExec {
+		proxy.Println("promote:", fmt.Sprintf("-> %q", cmd))
+		if _, err := masterConn.Write(cmd); err != nil {
+			proxy.Println("promote:", "ERR", err)
+			return err
+		}
+		resp, err := masterReader.ParseObject()
+		if err != nil {
+			proxy.Println("promote:", "ERR", err)
+			return errors.New("unable to pause clients")
+		}
+		switch t := resp.(type) {
+		case Error:
+			proxy.Println("promote:", fmt.Sprintf("<- %q", t.String()))
+			return errors.New(t.String())
+		// EXEC returns an array, where the first item is a Bulk String INFO result
+		case Array:
+			for _, r := range t {
+				if e, ok := r.(Error); ok {
+					proxy.Println("promote:", fmt.Sprintf("<- %q", e.String()))
+					return errors.New(e.String())
+				}
+				proxy.Println("promote:", fmt.Sprintf("<- %q", r.String()))
+			}
+			info = t[0].String() // Just the info
+		default:
+			proxy.Println("promote:", fmt.Sprintf("<- %q", t.String()))
+		}
+	}
+
+	repl, err := proxy.parseInfo(info)
+	if err != nil {
+		return err
+	}
+	slave, ok := repl[slaveID]
+	if !ok {
+		return fmt.Errorf("no slave '%s' connected", slaveID)
+	}
+	var ip, port string
+	for _, part := range strings.Split(slave, ",") {
+		kv := strings.Split(part, "=")
+		switch kv[0] {
+		case "ip":
+			ip = kv[1]
+		case "port":
+			port = kv[1]
+		}
+	}
+
+	masterReplOffset, ok := repl["master_repl_offset"]
+	if !ok {
+		return errors.New("no 'master_repl_offset' value")
+	}
+
+	proxy.Println("promote:", "master_repl_offset:"+masterReplOffset)
+
+	// Create a new connection to the slave
+	dialer = Dialer{IP: ip, Port: port, Auth: auth}
+	slaveConn, err := dialer.Dial()
+	if err != nil {
+		return err
+	}
+	defer slaveConn.Close()
+	slaveReader := NewReader(slaveConn)
+
 	for range time.Tick(100 * time.Millisecond) {
 		select {
-		case <-timeout:
-			return errors.New("timeout")
+		case <-cancel:
+			return errors.New("timed out")
 		default:
 		}
-
-		if _, err := masterConn.Write([]byte("*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n")); err != nil {
+		if _, err := slaveConn.Write([]byte("*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n")); err != nil {
 			return err
 		}
-		parsed, err := masterReader.ParseObject()
+		resp, err := slaveReader.ParseObject()
 		if err != nil {
-			return err
+			proxy.Println("promote:", "ERR:", err)
+			return errors.New("unable to discover slave replication offset")
 		}
-		info, err := proxy.parseInfo(parsed[0])
-		if err != nil {
-			return err
-		}
-		masterOffset, ok := info["master_repl_offset"]
+		info, ok := resp.(BulkString)
 		if !ok {
-			return errors.New("no master_repl_offset found")
+			return errors.New(resp.HumanReadable())
 		}
-		// Search the first ten slaves
-		slaveOffset := "-1"
-		for i := 0; i < 10; i++ {
-			slaveInfo, ok := info[fmt.Sprintf("slave%d", i)]
-			if !ok {
-				return errors.New(ip + ":" + port + " is not a slave")
-			}
-			slaveMap := map[string]string{}
-			for _, slaveKV := range strings.Split(slaveInfo, ",") {
-				kv := strings.Split(slaveKV, "=")
-				slaveMap[kv[0]] = kv[1]
-			}
-			if slaveMap["ip"] == ip && slaveMap["port"] == port {
-				slaveOffset = slaveMap["offset"]
-				break
-			}
+		repl, err := proxy.parseInfo(info.String())
+		if err != nil {
+			return err
 		}
-		// If no matching slave found
-		if slaveOffset == "-1" {
-			return errors.New(ip + ":" + port + " is not a slave")
-		}
-		moff, _ := strconv.Atoi(masterOffset)
-		soff, _ := strconv.Atoi(slaveOffset)
-		proxy.Println("promoting: slave is behind by", moff-soff)
 
-		if slaveOffset == masterOffset {
+		slaveReplOffset, ok := repl["slave_repl_offset"]
+		if !ok {
+			return fmt.Errorf("no slave '%s' replicating", slaveID)
+		}
+		proxy.Println("promote:", "slave_repl_offset:"+slaveReplOffset)
+		if len(masterReplOffset) <= len(slaveReplOffset) || masterReplOffset < slaveReplOffset {
 			break
 		}
+	}
+
+	select {
+	case <-cancel:
+		return errors.New("timed out")
+	default:
 	}
 
 	if _, err := slaveConn.Write([]byte("*3\r\n$7\r\nSLAVEOF\r\n$2\r\nNO\r\n$3\r\nONE\r\n")); err != nil {
 		return err
 	}
-	response, err := slaveReader.ParseObject()
+	resp, err := slaveReader.ParseObject()
 	if err != nil {
 		return err
 	}
-	if string(response[0]) != "OK" {
-		return errors.New(string(response[0]))
+	if e, ok := resp.(Error); ok {
+		return errors.New(string(e))
 	}
 
 	proxy.clientConn.Write([]byte("+OK\r\n"))
-
 	proxy.dialer.Reset(ip, port, auth)
 
 	return nil
 }
 
-func (proxy *Proxy) parseInfo(info []byte) (map[string]string, error) {
-	// r := bufio.NewReader(bytes.NewReader(info))
+func (proxy *Proxy) parseInfo(info string) (map[string]string, error) {
 	m := map[string]string{}
-
-	scanner := bufio.NewScanner(bytes.NewReader(info))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, ":") {
-			continue
+	for _, line := range strings.Split(info, "\r\n") {
+		kv := strings.Split(string(line), ":")
+		if len(kv) == 2 {
+			m[kv[0]] = kv[1]
 		}
-		kv := strings.Split(line, ":")
-		m[kv[0]] = kv[1]
 	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
 	return m, nil
 }

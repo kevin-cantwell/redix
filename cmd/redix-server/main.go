@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -64,36 +63,32 @@ func handle(ctx context.Context, proxy redix.Proxy) {
 	}
 
 	for {
-		clientResp, err := proxy.ReadClientObject()
+		array, err := proxy.ParseClientObject()
 		if err != nil {
-			proxy.Println("client:", err)
+			// proxy.Println("client:", err)
+			proxy.WriteClientErr(err)
 			return
 		}
 
-		parsed, err := redix.NewReader(bytes.NewReader(clientResp)).ParseObject()
-		if err != nil {
-			proxy.WriteClientErr(err)
-			continue
-		}
-
-		switch string(bytes.ToLower(parsed[0])) {
+		switch strings.ToLower(array[0].String()) {
+		// PROMOTE slaveX auth timeout
 		case "promote":
-			if len(parsed) < 3 || len(parsed) > 4 {
+			if len(array) < 3 || len(array) > 4 {
 				proxy.WriteClientErr(errors.New("wrong number of arguments for 'promote' command"))
 				return
 			}
-			ip, port, auth := string(parsed[1]), string(parsed[2]), ""
-			if len(parsed) == 4 {
-				auth = string(parsed[3])
+			slaveID, auth, timeout := array[1].String(), "", array[len(array)-1].String()
+			if len(array) == 4 {
+				auth = array[2].String()
 			}
-			if err := proxy.Promote(ip, port, auth); err != nil {
+			if err := proxy.Promote(slaveID, auth, timeout); err != nil {
 				proxy.WriteClientErr(err)
 			}
 			return
 		default:
 		}
 
-		if err := proxy.WriteServerObject(clientResp); err != nil {
+		if err := proxy.WriteServerObject(array.Raw()); err != nil {
 			proxy.WriteClientErr(err)
 			return
 		}
