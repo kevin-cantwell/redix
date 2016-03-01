@@ -145,10 +145,12 @@ func (proxy *Proxy) Promote(slaveID, auth, timeout string) error {
 	}
 	cancel := time.After(time.Duration(millis) * time.Millisecond)
 
+	proxy.mgr.CloseAll()
+
 	multiExec := [][]byte{
 		[]byte("*1\r\n$5\r\nMULTI\r\n"),
 		[]byte("*2\r\n$4\r\nINFO\r\n$11\r\nreplication\r\n"),
-		[]byte("*3\r\n$6\r\nCLIENT\r\n$5\r\nPAUSE\r\n" + fmt.Sprintf("$%d\r\n%s\r\n", len(timeout), timeout)),
+		// []byte("*3\r\n$6\r\nCLIENT\r\n$5\r\nPAUSE\r\n" + fmt.Sprintf("$%d\r\n%s\r\n", len(timeout), timeout)),
 		[]byte("*1\r\n$4\r\nEXEC\r\n"),
 	}
 
